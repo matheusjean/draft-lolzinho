@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .claude/
+backend/.env
+backend/.env.local
+backend/.vercel/
 
 npm-debug.log*
 yarn-debug.log*

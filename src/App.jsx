@@ -1,724 +1,538 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { createPortal } from 'react-dom'
+import { useCallback, useEffect, useState } from 'react'
+
+import {
+  createMatch,
+  createPlayer,
+  deleteMatch,
+  getMatches,
+  getMe,
+  getPlayerById,
+  getPlayers,
+  requestLoginCode,
+  verifyLoginCode,
+} from './api'
+import { DrawScreen } from './components/DrawScreen'
+import { HistoryModal } from './components/HistoryModal'
+import { InputScreen } from './components/InputScreen'
+import { LeaderboardModal } from './components/LeaderboardPanel'
+import { LoginScreen } from './components/LoginScreen'
+import { MatchHistoryModal } from './components/MatchHistoryModal'
+import { PlayerRegistrationModal } from './components/PlayerRegistrationModal'
+import {
+  AUTH_EMAIL_KEY,
+  clearStoredSession,
+  DEFAULT_ADMIN_EMAIL,
+  loadStoredEmail,
+  loadStoredToken,
+  normalizeCatalogPlayer,
+  normalizeName,
+  persistSession,
+} from './lib/app-utils'
 import './App.css'
 
-const PLAYER_COUNT = 10
-const CARD_WIDTH = 120
-const CARD_GAP = 14
-const CARD_TOTAL = CARD_WIDTH + CARD_GAP
-const AUTO_CONFIRM_DELAY = 450
-
-const ICONS = {
-  swords: '\u2694\uFE0F',
-  camera: '\uD83D\uDCF7',
-  pencil: '\u270F\uFE0F',
-  trophy: '\uD83C\uDFC6',
-  blue: '\uD83D\uDD35',
-  red: '\uD83D\uDD34',
-  up: '\u25B2',
-  down: '\u25BC',
-  right: '\u25B6',
-  left: '\u25C0',
-}
-
-const ROLE_COLORS = [
-  '#1E3A5F', '#5C1E1E', '#1E5C2A', '#4A1E5C', '#5C4A1E',
-  '#1E4A5C', '#5C1E3A', '#2A5C1E', '#5C3A1E', '#1E1E5C',
-]
-
-const LS_KEY = 'lol_draft_players'
-
-function loadSaved() {
-  try {
-    return JSON.parse(localStorage.getItem(LS_KEY) || '[]')
-  } catch {
-    return []
-  }
-}
-
-function upsertSaved(name, imageUrl) {
-  const list = loadSaved()
-  const idx = list.findIndex(player => player.name.toLowerCase() === name.toLowerCase())
-  const entry = { name, imageUrl: imageUrl || null }
-
-  if (idx >= 0) list[idx] = entry
-  else list.push(entry)
-
-  localStorage.setItem(LS_KEY, JSON.stringify(list))
-}
-
-function deleteSaved(name) {
-  const list = loadSaved().filter(player => player.name.toLowerCase() !== name.toLowerCase())
-  localStorage.setItem(LS_KEY, JSON.stringify(list))
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = event => resolve(event.target.result)
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-function initials(name) {
-  return name
-    .split(' ')
-    .map(word => word[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
-}
-
-function shufflePlayers(players) {
-  const shuffled = [...players]
-
-  for (let index = shuffled.length - 1; index > 0; index -= 1) {
-    const randomIndex = Math.floor(Math.random() * (index + 1))
-    ;[shuffled[index], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[index]]
-  }
-
-  return shuffled
-}
-
-function Avatar({ player, size = 40, className = '' }) {
-  const color = ROLE_COLORS[(player.index ?? 0) % ROLE_COLORS.length]
-
-  if (player.imageUrl) {
-    return (
-      <img
-        src={player.imageUrl}
-        alt={player.name}
-        className={`avatar-img ${className}`}
-        style={{ width: size, height: size }}
-        draggable={false}
-      />
-    )
-  }
+function NoticeBar({ notice }) {
+  if (!notice) return null
 
   return (
-    <div
-      className={`avatar-fallback ${className}`}
-      style={{ width: size, height: size, background: color }}
-    >
-      {player.name ? initials(player.name) : '?'}
+    <div className={`notice-bar ${notice.type === 'error' ? 'notice-error' : 'notice-success'}`}>
+      {notice.text}
     </div>
   )
 }
 
-function PlayerRow({ slot, onChange, selectedNames }) {
-  const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState(slot.name)
-  const [savedList, setSavedList] = useState(loadSaved)
-  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 0 })
-  const fileRef = useRef(null)
-  const rowRef = useRef(null)
-  const normalizedCurrentName = slot.name.trim().toLowerCase()
-  const blockedNames = new Set(
-    selectedNames.filter(name => name !== normalizedCurrentName)
+function LoadingScreen() {
+  return (
+    <div className="loading-screen">
+      <div className="loading-card">
+        <div className="loading-title">Carregando dados do backend</div>
+        <div className="loading-subtitle">Players cadastrados e partidas recentes estao sendo sincronizados.</div>
+      </div>
+    </div>
   )
+}
 
-  useEffect(() => {
-    setQuery(slot.name)
-  }, [slot.name])
+function HeaderBar({
+  user,
+  playersCount,
+  matchesCount,
+  canRegisterPlayer,
+  onOpenLeaderboard,
+  onOpenMatchHistory,
+  onOpenHistory,
+  onOpenLogin,
+  onOpenRegister,
+  onLogout,
+}) {
+  return (
+    <header className="app-topbar">
+      <div>
+        <div className="topbar-kicker">LoL Draft Manager</div>
+        <div className="topbar-title">Draft livre com cadastro de jogador controlado no backend</div>
+      </div>
 
-  useEffect(() => {
-    function onOutsideClick(event) {
-      const list = document.getElementById('dropdown-portal')
-      if (
-        rowRef.current &&
-        !rowRef.current.contains(event.target) &&
-        (!list || !list.contains(event.target))
-      ) {
-        setOpen(false)
-      }
-    }
+      <div className="topbar-meta">
+        <div className="topbar-chip">
+          <span>{playersCount}</span>
+          players
+        </div>
+        <div className="topbar-chip">
+          <span>{matchesCount}</span>
+          partidas
+        </div>
 
-    document.addEventListener('mousedown', onOutsideClick)
-    return () => document.removeEventListener('mousedown', onOutsideClick)
-  }, [])
+        <button className="topbar-action" type="button" onClick={onOpenLeaderboard}>
+          Tabela atualizada
+        </button>
 
-  function openDropdown() {
-    setSavedList(loadSaved())
-    const rect = rowRef.current?.getBoundingClientRect()
+        <button className="topbar-action" type="button" onClick={onOpenHistory}>
+          Historico players
+        </button>
 
-    if (rect) {
-      setDropPos({
-        top: rect.bottom + window.scrollY + 4,
-        left: rect.left + window.scrollX,
-        width: rect.width,
-      })
-    }
+        <button className="topbar-action" type="button" onClick={onOpenMatchHistory}>
+          Historico partidas
+        </button>
 
-    setOpen(true)
-  }
+        {canRegisterPlayer && (
+          <button className="topbar-action" type="button" onClick={onOpenRegister}>
+            Cadastro de jogador
+          </button>
+        )}
 
-  const availableSaved = savedList.filter(player => {
-    const normalizedName = player.name.toLowerCase()
-    return !blockedNames.has(normalizedName)
-  })
-
-  const filtered = availableSaved.filter(player =>
-    query.trim() === '' || player.name.toLowerCase().includes(query.toLowerCase())
-  )
-
-  function selectSaved(player) {
-    onChange({ name: player.name, imageUrl: player.imageUrl })
-    setQuery(player.name)
-    setOpen(false)
-  }
-
-  function handleNameChange(value) {
-    setQuery(value)
-    onChange({ name: value, imageUrl: slot.imageUrl })
-    if (!open) openDropdown()
-  }
-
-  async function handleFile(file) {
-    if (!file) return
-    const b64 = await fileToBase64(file)
-    onChange({ name: slot.name, imageUrl: b64 })
-  }
-
-  function handleDeleteSaved(event, name) {
-    event.stopPropagation()
-    deleteSaved(name)
-    const next = loadSaved()
-    setSavedList(next)
-
-    if (slot.name.toLowerCase() === name.toLowerCase()) {
-      onChange({ name: '', imageUrl: null })
-      setQuery('')
-    }
-  }
-
-  const hasSaved = availableSaved.length > 0
-  const showList = open && (filtered.length > 0 || query.trim() !== '')
-
-  const dropdownEl = showList && createPortal(
-    <div
-      id="dropdown-portal"
-      className="dropdown-list"
-      style={{
-        position: 'absolute',
-        top: dropPos.top,
-        left: dropPos.left,
-        width: dropPos.width,
-        zIndex: 9999,
-      }}
-    >
-      {filtered.length === 0 ? (
-        <div className="dropdown-empty">Nenhum jogador salvo com esse nome</div>
-      ) : (
-        filtered.map(player => (
-          <div key={player.name} className="dropdown-item" onMouseDown={() => selectSaved(player)}>
-            <div className="dropdown-item-avatar">
-              {player.imageUrl
-                ? <img src={player.imageUrl} alt="" />
-                : <div className="dropdown-item-initials">{initials(player.name)}</div>}
-            </div>
-            <span className="dropdown-item-name">{player.name}</span>
-            <button
-              className="dropdown-item-del"
-              title="Remover da lista"
-              onMouseDown={event => handleDeleteSaved(event, player.name)}
-            >
-              x
+        {user ? (
+          <>
+            <div className="topbar-user">{user.email}</div>
+            <button className="topbar-logout" type="button" onClick={onLogout}>
+              Sair
             </button>
-          </div>
-        ))
-      )}
-    </div>,
-    document.body
-  )
-
-  return (
-    <div className={`player-row ${slot.name.trim() ? 'row-filled' : ''}`} ref={rowRef}>
-      <button className="photo-btn" type="button" onClick={() => fileRef.current?.click()} title="Alterar foto">
-        {slot.imageUrl ? (
-          <img src={slot.imageUrl} alt="" className="photo-preview" />
+          </>
         ) : (
-          <div className="photo-placeholder">
-            <span className="photo-icon">{ICONS.camera}</span>
-          </div>
-        )}
-        <div className="photo-overlay">{ICONS.pencil}</div>
-      </button>
-
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/*"
-        style={{ display: 'none' }}
-        onChange={event => handleFile(event.target.files[0])}
-      />
-
-      <input
-        className="name-input"
-        type="text"
-        placeholder="Invocador..."
-        value={query}
-        maxLength={24}
-        onChange={event => handleNameChange(event.target.value)}
-        onFocus={openDropdown}
-        onKeyDown={event => {
-          if (event.key === 'Escape') setOpen(false)
-        }}
-      />
-
-      {hasSaved && (
-        <button
-          className="dropdown-arrow"
-          type="button"
-          onMouseDown={event => {
-            event.preventDefault()
-            if (open) setOpen(false)
-            else openDropdown()
-          }}
-          title="Jogadores salvos"
-        >
-          {open ? ICONS.up : ICONS.down}
-        </button>
-      )}
-
-      {dropdownEl}
-    </div>
-  )
-}
-
-function InputScreen({ onStart }) {
-  const [slots, setSlots] = useState(
-    Array.from({ length: PLAYER_COUNT }, () => ({ name: '', imageUrl: null }))
-  )
-  const selectedNames = slots
-    .map(slot => slot.name.trim().toLowerCase())
-    .filter(Boolean)
-
-  function updateSlot(index, patch) {
-    setSlots(prev => {
-      const next = [...prev]
-      next[index] = { ...next[index], ...patch }
-      return next
-    })
-  }
-
-  const validCount = slots.filter(slot => slot.name.trim()).length
-
-  function handleStart() {
-    const valid = slots.filter(slot => slot.name.trim())
-    if (valid.length < 2) return
-
-    valid.forEach(slot => upsertSaved(slot.name.trim(), slot.imageUrl))
-
-    const players = valid.map((slot, rank) => ({
-      name: slot.name.trim(),
-      imageUrl: slot.imageUrl,
-      index: rank,
-    }))
-
-    onStart(players)
-  }
-
-  return (
-    <div className="input-screen">
-      <div className="bg-runes" aria-hidden>
-        {Array.from({ length: 6 }).map((_, index) => (
-          <div key={index} className={`rune rune-${index}`} />
-        ))}
-      </div>
-
-      <header className="lol-header">
-        <div className="header-swords">{ICONS.swords}</div>
-        <h1 className="lol-title">DRAFT DE TIMES</h1>
-        <p className="lol-subtitle">Selecione ou adicione seus invocadores</p>
-        <div className="gold-divider" />
-      </header>
-
-      <div className="inputs-grid">
-        {slots.map((slot, index) => (
-          <PlayerRow
-            key={index}
-            slot={slot}
-            onChange={patch => updateSlot(index, patch)}
-            selectedNames={selectedNames}
-          />
-        ))}
-      </div>
-
-      <div className="valid-count">
-        <span className={validCount >= 2 ? 'count-ok' : 'count-low'}>{validCount}</span>
-        &nbsp;/ {PLAYER_COUNT} invocadores
-      </div>
-
-      <button className="btn-draft" onClick={handleStart} disabled={validCount < 2}>
-        <span className="btn-draft-icon">{ICONS.swords}</span>
-        INICIAR DRAFT
-        <span className="btn-draft-icon">{ICONS.swords}</span>
-      </button>
-    </div>
-  )
-}
-
-function TeamPlayerCard({ player, side, position }) {
-  return (
-    <div
-      className={`team-card ${side === 'blue' ? 'team-card-blue slide-left' : 'team-card-red slide-right'}`}
-      style={{ animationDelay: `${position * 0.05}s` }}
-    >
-      <Avatar player={player} size={36} className="team-card-avatar" />
-      <span className="team-card-name">{player.name}</span>
-    </div>
-  )
-}
-
-function SlotMachine({ players, onPick, nextSide, autoDrafting, onStartAutoDraft, onQuickDraw }) {
-  const viewportRef = useRef(null)
-  const [offset, setOffset] = useState(0)
-  const [spinning, setSpinning] = useState(false)
-  const [picked, setPicked] = useState(null)
-  const animRef = useRef(null)
-  const confirmTimeoutRef = useRef(null)
-  const offsetRef = useRef(0)
-  const spinData = useRef({})
-  const initialized = useRef(false)
-
-  const syncOffset = useCallback(value => {
-    offsetRef.current = value
-    setOffset(value)
-  }, [])
-
-  const clearConfirmTimeout = useCallback(() => {
-    if (confirmTimeoutRef.current) {
-      window.clearTimeout(confirmTimeoutRef.current)
-      confirmTimeoutRef.current = null
-    }
-  }, [])
-
-  const finishPick = useCallback(player => {
-    clearConfirmTimeout()
-    setPicked(null)
-    initialized.current = false
-    onPick(player)
-  }, [clearConfirmTimeout, onPick])
-
-  useEffect(() => {
-    if (initialized.current) return
-
-    const vw = viewportRef.current?.offsetWidth || 700
-    const loops = players.length * CARD_TOTAL
-    const centerOffset = loops - (vw / 2 - CARD_WIDTH / 2)
-
-    syncOffset(centerOffset)
-    initialized.current = true
-  }, [players.length, syncOffset])
-
-  const easeOutQuart = t => 1 - Math.pow(1 - t, 4)
-
-  const animate = useCallback(() => {
-    const { start, from, to, duration, autoConfirm } = spinData.current
-    const elapsed = Date.now() - start
-    const t = Math.min(elapsed / duration, 1)
-    const currentOffset = from + (to - from) * easeOutQuart(t)
-
-    syncOffset(currentOffset)
-
-    if (t < 1) {
-      animRef.current = requestAnimationFrame(animate)
-      return
-    }
-
-    const loops = players.length * CARD_TOTAL
-    const normalizedTo = ((to % loops) + loops) % loops + loops
-    const vw = viewportRef.current?.offsetWidth || 700
-    const viewCenter = normalizedTo + vw / 2
-    const rawIdx = Math.round((viewCenter - CARD_WIDTH / 2) / CARD_TOTAL)
-    const idx = ((rawIdx % players.length) + players.length) % players.length
-
-    syncOffset(normalizedTo)
-    setSpinning(false)
-    setPicked(idx)
-
-    if (autoConfirm) {
-      const selectedPlayer = players[idx]
-      clearConfirmTimeout()
-      confirmTimeoutRef.current = window.setTimeout(() => {
-        finishPick(selectedPlayer)
-      }, AUTO_CONFIRM_DELAY)
-    }
-  }, [clearConfirmTimeout, finishPick, players, syncOffset])
-
-  const spin = useCallback(({ autoConfirm = false } = {}) => {
-    if (spinning || picked !== null || players.length === 0) return
-
-    clearConfirmTimeout()
-    setSpinning(true)
-    setPicked(null)
-
-    const vw = viewportRef.current?.offsetWidth || 700
-    const rounds = 3 + Math.floor(Math.random() * 3)
-    const stopIdx = Math.floor(Math.random() * players.length)
-    const baseTarget = stopIdx * CARD_TOTAL + CARD_WIDTH / 2 - vw / 2
-    const loops = players.length * CARD_TOTAL
-    const currentOffset = offsetRef.current
-
-    let target = baseTarget
-    target += Math.ceil((currentOffset - baseTarget) / loops + 1) * loops
-    target += rounds * loops
-
-    spinData.current = {
-      start: Date.now(),
-      from: currentOffset,
-      to: target,
-      duration: 2400 + Math.random() * 800,
-      autoConfirm,
-    }
-
-    animRef.current = requestAnimationFrame(animate)
-  }, [animate, clearConfirmTimeout, picked, players.length, spinning])
-
-  function confirm() {
-    if (picked === null || spinning) return
-    finishPick(players[picked])
-  }
-
-  useEffect(() => {
-    if (!autoDrafting || spinning || picked !== null || players.length === 0) return
-    spin({ autoConfirm: true })
-  }, [autoDrafting, picked, players, spin, spinning])
-
-  useEffect(() => {
-    return () => {
-      if (animRef.current) cancelAnimationFrame(animRef.current)
-      clearConfirmTimeout()
-    }
-  }, [clearConfirmTimeout])
-
-  const COPIES = 10
-  const loopItems = Array.from({ length: COPIES }, () => players).flat()
-  const pickedPlayer = picked !== null ? players[picked] : null
-  const autoBusy = autoDrafting || Boolean(confirmTimeoutRef.current)
-
-  return (
-    <div className="slot-section">
-      <div className="slot-top-bar">
-        <div className="gold-divider-thin" />
-        <span className="slot-title">FASE DE PICK</span>
-        <div className="gold-divider-thin" />
-      </div>
-
-      <div className="slot-status">
-        {pickedPlayer ? (
-          <div className="slot-picked-row">
-            <Avatar player={pickedPlayer} size={32} className="slot-picked-avatar" />
-            <span className="slot-picked-text">
-              <strong>{pickedPlayer.name}</strong> selecionado
-            </span>
-            {autoBusy ? (
-              <span className={`slot-auto-confirm ${nextSide === 'blue' ? 'auto-blue' : 'auto-red'}`}>
-                entrando no {nextSide === 'blue' ? 'Blue Side' : 'Red Side'}...
-              </span>
-            ) : (
-              <button
-                className={`btn-confirm ${nextSide === 'blue' ? 'confirm-blue' : 'confirm-red'}`}
-                onClick={confirm}
-              >
-                Confirmar para {nextSide === 'blue' ? 'Blue Side' : 'Red Side'}
-              </button>
-            )}
-          </div>
-        ) : spinning ? (
-          <span className="slot-spinning-txt">
-            {autoDrafting ? 'Modo automatico: sorteando invocador...' : 'Selecionando invocador...'}
-          </span>
-        ) : (
-          <span className="slot-idle-txt">
-            {autoDrafting ? 'Modo automatico aguardando o proximo pick...' : 'Clique em GIRAR para selecionar'}
-          </span>
+          <button className="topbar-action" type="button" onClick={onOpenLogin}>
+            Login
+          </button>
         )}
       </div>
-
-      <div className="slot-wrapper">
-        <div className={`slot-arrow ${nextSide === 'blue' ? 'arrow-blue' : 'arrow-red'}`}>{ICONS.right}</div>
-
-        <div className="slot-viewport" ref={viewportRef}>
-          <div className={`slot-center-box ${nextSide === 'blue' ? 'center-blue' : 'center-red'}`} />
-          <div className="slot-track" style={{ transform: `translateX(${-offset}px)` }}>
-            {loopItems.map((player, index) => {
-              const isCenter =
-                !spinning &&
-                picked !== null &&
-                index % players.length === picked &&
-                Math.floor(index / players.length) === 1
-
-              return (
-                <div
-                  key={`${player.name}-${index}`}
-                  className={`slot-card ${isCenter ? (nextSide === 'blue' ? 'slot-card-blue' : 'slot-card-red') : ''}`}
-                  style={{ width: CARD_WIDTH }}
-                >
-                  <Avatar player={player} size={64} className="slot-card-avatar" />
-                  <div className="slot-card-name">{player.name}</div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        <div className={`slot-arrow ${nextSide === 'blue' ? 'arrow-blue' : 'arrow-red'}`}>{ICONS.left}</div>
-      </div>
-
-      <div className="slot-actions">
-        <button
-          className={`btn-spin ${spinning ? 'is-spinning' : ''} ${nextSide === 'blue' ? 'spin-blue' : 'spin-red'}`}
-          onClick={() => spin()}
-          disabled={spinning || picked !== null || autoDrafting}
-        >
-          {spinning ? 'SELECIONANDO...' : 'GIRAR'}
-        </button>
-
-        <button
-          className="btn-auto-draft"
-          onClick={onStartAutoDraft}
-          disabled={spinning || picked !== null || autoDrafting}
-        >
-          {autoDrafting ? 'SORTEANDO ATE O FIM...' : 'SORTEAR TODO MUNDO'}
-        </button>
-
-        <button
-          className="btn-fast-draft"
-          onClick={onQuickDraw}
-          disabled={spinning || picked !== null || autoDrafting}
-        >
-          SORTEIO RAPIDO
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function DrawScreen({ initialPlayers, onRestart }) {
-  const [team1, setTeam1] = useState([])
-  const [team2, setTeam2] = useState([])
-  const [autoDrafting, setAutoDrafting] = useState(false)
-  const [remaining, setRemaining] = useState(() =>
-    [...initialPlayers].sort(() => Math.random() - 0.5)
-  )
-
-  const pickedCount = team1.length + team2.length
-  const nextSide = pickedCount % 2 === 0 ? 'blue' : 'red'
-  const allDone = remaining.length === 0
-
-  useEffect(() => {
-    if (allDone) setAutoDrafting(false)
-  }, [allDone])
-
-  function handlePick(player) {
-    if (nextSide === 'blue') setTeam1(prev => [...prev, player])
-    else setTeam2(prev => [...prev, player])
-
-    setRemaining(prev => prev.filter(current => current.name !== player.name))
-  }
-
-  function handleQuickDraw() {
-    if (remaining.length === 0) return
-
-    const shuffledRemaining = shufflePlayers(remaining)
-    const nextTeam1 = [...team1]
-    const nextTeam2 = [...team2]
-    let side = nextSide
-
-    shuffledRemaining.forEach(player => {
-      if (side === 'blue') {
-        nextTeam1.push(player)
-        side = 'red'
-      } else {
-        nextTeam2.push(player)
-        side = 'blue'
-      }
-    })
-
-    setAutoDrafting(false)
-    setTeam1(nextTeam1)
-    setTeam2(nextTeam2)
-    setRemaining([])
-  }
-
-  return (
-    <div className="draw-screen">
-      <div className="draw-header">
-        <span className="draw-header-title">{`${ICONS.swords} DRAFT DE TIMES ${ICONS.swords}`}</span>
-      </div>
-
-      <div className="teams-container">
-        <div className="team-col blue-side">
-          <div className="team-col-header blue-header">
-            <span className="side-icon">{ICONS.blue}</span>
-            <span className="side-title">BLUE SIDE</span>
-          </div>
-          <div className="team-list">
-            {team1.map((player, index) => (
-              <TeamPlayerCard key={player.name} player={player} side="blue" position={index} />
-            ))}
-            {!allDone && nextSide === 'blue' && (
-              <div className="pick-indicator pick-indicator-blue">{'<- aguardando pick'}</div>
-            )}
-          </div>
-        </div>
-
-        <div className="center-panel">
-          {allDone ? (
-            <div className="done-panel">
-              <div className="done-cup">{ICONS.trophy}</div>
-              <p className="done-text">GG! Times prontos.</p>
-              <button className="btn-new-draft" onClick={onRestart}>Novo Draft</button>
-            </div>
-          ) : (
-            <div className="draft-status">
-              <div className={`draft-turn ${nextSide === 'blue' ? 'turn-blue' : 'turn-red'}`}>
-                {nextSide === 'blue' ? `${ICONS.blue} Blue` : `${ICONS.red} Red`}
-              </div>
-              <div className="draft-turn-label">
-                {autoDrafting ? 'modo automatico ativo' : 'escolhe agora'}
-              </div>
-              <div className="remaining-badge">{remaining.length}</div>
-              <div className="remaining-label">restantes</div>
-            </div>
-          )}
-        </div>
-
-        <div className="team-col red-side">
-          <div className="team-col-header red-header">
-            <span className="side-title">RED SIDE</span>
-            <span className="side-icon">{ICONS.red}</span>
-          </div>
-          <div className="team-list">
-            {team2.map((player, index) => (
-              <TeamPlayerCard key={player.name} player={player} side="red" position={index} />
-            ))}
-            {!allDone && nextSide === 'red' && (
-              <div className="pick-indicator pick-indicator-red">{'aguardando pick ->'}</div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {!allDone && (
-        <SlotMachine
-          players={remaining}
-          onPick={handlePick}
-          nextSide={nextSide}
-          autoDrafting={autoDrafting}
-          onStartAutoDraft={() => setAutoDrafting(true)}
-          onQuickDraw={handleQuickDraw}
-        />
-      )}
-    </div>
+    </header>
   )
 }
 
 export default function App() {
-  const [players, setPlayers] = useState(null)
+  const [token, setToken] = useState(loadStoredToken)
+  const [storedEmail, setStoredEmail] = useState(loadStoredEmail)
+  const [user, setUser] = useState(null)
+  const [playersCatalog, setPlayersCatalog] = useState([])
+  const [matches, setMatches] = useState([])
+  const [draftPlayers, setDraftPlayers] = useState(null)
+  const [notice, setNotice] = useState(null)
+  const [bootLoading, setBootLoading] = useState(true)
+  const [authSubmitting, setAuthSubmitting] = useState(false)
+  const [savingMatch, setSavingMatch] = useState(false)
+  const [creatingPlayer, setCreatingPlayer] = useState(false)
+  const [previewCode, setPreviewCode] = useState('')
+  const [showLoginModal, setShowLoginModal] = useState(false)
+  const [showPlayerRegistration, setShowPlayerRegistration] = useState(false)
+  const [showLeaderboardModal, setShowLeaderboardModal] = useState(false)
+  const [showHistoryModal, setShowHistoryModal] = useState(false)
+  const [showMatchHistoryModal, setShowMatchHistoryModal] = useState(false)
+  const [playerHistories, setPlayerHistories] = useState({})
+  const [loadingPlayerHistoryId, setLoadingPlayerHistoryId] = useState('')
+  const [deletingMatchId, setDeletingMatchId] = useState('')
 
-  if (!players) return <InputScreen onStart={setPlayers} />
-  return <DrawScreen initialPlayers={players} onRestart={() => setPlayers(null)} />
+  const isPlayerAdmin = user?.email?.toLowerCase() === DEFAULT_ADMIN_EMAIL
+
+  const refreshPlayers = useCallback(async (sessionToken = token) => {
+    const data = await getPlayers(sessionToken || undefined)
+    const normalized = data.map((player, index) => normalizeCatalogPlayer(player, index))
+    setPlayersCatalog(normalized)
+    return normalized
+  }, [token])
+
+  const refreshMatches = useCallback(async (sessionToken = token) => {
+    const data = await getMatches(sessionToken || undefined)
+    setMatches(data)
+    return data
+  }, [token])
+
+  useEffect(() => {
+    if (!notice) return undefined
+
+    const timeoutId = window.setTimeout(() => setNotice(null), 5000)
+    return () => window.clearTimeout(timeoutId)
+  }, [notice])
+
+  useEffect(() => {
+    let active = true
+
+    async function bootstrap() {
+      setBootLoading(true)
+
+      try {
+        const [catalog, recentMatches] = await Promise.all([
+          getPlayers(),
+          getMatches(),
+        ])
+
+        if (!active) return
+
+        setPlayersCatalog(catalog.map((player, index) => normalizeCatalogPlayer(player, index)))
+        setMatches(recentMatches)
+
+        if (token) {
+          try {
+            const currentUser = await getMe(token)
+            if (!active) return
+            setUser(currentUser)
+            setStoredEmail(currentUser.email)
+          } catch {
+            if (!active) return
+            clearStoredSession()
+            setToken('')
+            setUser(null)
+          }
+        }
+      } finally {
+        if (active) setBootLoading(false)
+      }
+    }
+
+    bootstrap()
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  async function handleRequestCode(email) {
+    setAuthSubmitting(true)
+
+    try {
+      const result = await requestLoginCode(email)
+      setStoredEmail(email)
+      localStorage.setItem(AUTH_EMAIL_KEY, email)
+      setPreviewCode(result.code || '')
+      setNotice({
+        type: 'success',
+        text: result.code
+          ? 'Codigo recebido do backend local. Use-o no modal para entrar.'
+          : 'Codigo gerado. Confira os logs do backend.',
+      })
+      return true
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        text: error.message || 'Nao foi possivel gerar o codigo.',
+      })
+      return false
+    } finally {
+      setAuthSubmitting(false)
+    }
+  }
+
+  async function handleVerifyCode(email, code) {
+    setAuthSubmitting(true)
+
+    try {
+      const result = await verifyLoginCode(email, code)
+      persistSession(result.accessToken, email)
+      setToken(result.accessToken)
+      setStoredEmail(email)
+      setUser(result.user)
+      setPreviewCode('')
+      setShowLoginModal(false)
+      await Promise.all([refreshPlayers(result.accessToken), refreshMatches(result.accessToken)])
+      setNotice({
+        type: 'success',
+        text: 'Login realizado com sucesso.',
+      })
+      return true
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        text: error.message || 'Nao foi possivel validar o codigo.',
+      })
+      return false
+    } finally {
+      setAuthSubmitting(false)
+    }
+  }
+
+  function handleLogout() {
+    clearStoredSession()
+    setToken('')
+    setUser(null)
+    setDraftPlayers(null)
+    setPreviewCode('')
+    setShowPlayerRegistration(false)
+    setShowLeaderboardModal(false)
+    setShowHistoryModal(false)
+    setShowMatchHistoryModal(false)
+    setStoredEmail(DEFAULT_ADMIN_EMAIL)
+    setNotice({
+      type: 'success',
+      text: 'Sessao encerrada.',
+    })
+  }
+
+  async function handleCreatePlayer(payload) {
+    if (!token || !isPlayerAdmin) {
+      setNotice({
+        type: 'error',
+        text: 'Somente o seu email pode cadastrar jogador.',
+      })
+      return false
+    }
+
+    setCreatingPlayer(true)
+
+    try {
+      await createPlayer(token, payload)
+      await refreshPlayers(token)
+      setNotice({
+        type: 'success',
+        text: 'Jogador cadastrado com sucesso.',
+      })
+      return true
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        text: error.message || 'Nao foi possivel cadastrar o jogador.',
+      })
+      return false
+    } finally {
+      setCreatingPlayer(false)
+    }
+  }
+
+  async function handleLoadPlayerHistory(playerId) {
+    if (!playerId) {
+      return null
+    }
+
+    if (playerHistories[playerId]) {
+      return playerHistories[playerId]
+    }
+
+    setLoadingPlayerHistoryId(playerId)
+
+    try {
+      const detail = await getPlayerById(playerId, token || undefined)
+      setPlayerHistories((current) => ({
+        ...current,
+        [playerId]: detail,
+      }))
+      return detail
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        text: error.message || 'Nao foi possivel carregar o historico do player.',
+      })
+      return null
+    } finally {
+      setLoadingPlayerHistoryId((current) => (current === playerId ? '' : current))
+    }
+  }
+
+  async function handleStartDraft(players) {
+    const catalogMap = new Map(
+      playersCatalog.map((player) => [normalizeName(player.name), player])
+    )
+    const missingPlayers = players.filter(
+      (player) => !catalogMap.has(normalizeName(player.name))
+    )
+
+    if (missingPlayers.length > 0) {
+      setNotice({
+        type: 'error',
+        text: `Cadastre os jogadores antes do draft: ${missingPlayers.map((player) => player.name).join(', ')}`,
+      })
+      return false
+    }
+
+    setDraftPlayers(
+      players.map((player, index) => {
+        const persisted = catalogMap.get(normalizeName(player.name))
+        return {
+          id: persisted.id,
+          name: persisted.name,
+          imageUrl: persisted.imageUrl,
+          matchesCount: persisted.matchesCount,
+          index,
+        }
+      })
+    )
+
+    return true
+  }
+
+  async function handleSaveMatch(payload) {
+    if (!token) {
+      setNotice({
+        type: 'error',
+        text: 'Entre pelo botao de login do header para salvar a partida.',
+      })
+      return null
+    }
+
+    if (!isPlayerAdmin) {
+      setNotice({
+        type: 'error',
+        text: 'Somente o seu email pode salvar partidas.',
+      })
+      return null
+    }
+
+    setSavingMatch(true)
+
+    try {
+      const savedMatch = await createMatch(token, payload)
+      await Promise.all([refreshPlayers(token), refreshMatches(token)])
+      setNotice({
+        type: 'success',
+        text: 'Partida salva com sucesso no backend.',
+      })
+      return savedMatch
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        text: error.message || 'Nao foi possivel salvar a partida.',
+      })
+      return null
+    } finally {
+      setSavingMatch(false)
+    }
+  }
+
+  async function handleDeleteMatch(match) {
+    if (!token) {
+      setNotice({
+        type: 'error',
+        text: 'Entre pelo botao de login do header para apagar a partida.',
+      })
+      return false
+    }
+
+    if (!isPlayerAdmin) {
+      setNotice({
+        type: 'error',
+        text: 'Somente o seu email pode apagar partidas.',
+      })
+      return false
+    }
+
+    setDeletingMatchId(match.id)
+
+    try {
+      await deleteMatch(token, match.id)
+      setPlayerHistories({})
+      await Promise.all([refreshPlayers(token), refreshMatches(token)])
+      setNotice({
+        type: 'success',
+        text: `Partida apagada com sucesso: ${match.title || formatMatchNoticeDate(match.gameDate)}.`,
+      })
+      return true
+    } catch (error) {
+      setNotice({
+        type: 'error',
+        text: error.message || 'Nao foi possivel apagar a partida.',
+      })
+      return false
+    } finally {
+      setDeletingMatchId((current) => (current === match.id ? '' : current))
+    }
+  }
+
+  if (bootLoading) {
+    return <LoadingScreen />
+  }
+
+  return (
+    <div className="app-shell">
+      <NoticeBar notice={notice} />
+
+      <HeaderBar
+        user={user}
+        playersCount={playersCatalog.length}
+        matchesCount={matches.length}
+        canRegisterPlayer={Boolean(isPlayerAdmin)}
+        onOpenLeaderboard={() => setShowLeaderboardModal(true)}
+        onOpenMatchHistory={() => setShowMatchHistoryModal(true)}
+        onOpenHistory={() => setShowHistoryModal(true)}
+        onOpenLogin={() => setShowLoginModal(true)}
+        onOpenRegister={() => setShowPlayerRegistration(true)}
+        onLogout={handleLogout}
+      />
+
+      <LeaderboardModal
+        open={showLeaderboardModal}
+        players={playersCatalog}
+        matches={matches}
+        onClose={() => setShowLeaderboardModal(false)}
+      />
+
+      {!draftPlayers ? (
+        <InputScreen
+          onStart={handleStartDraft}
+          savedPlayers={playersCatalog}
+          recentMatches={matches}
+          syncingPlayers={false}
+          loadingPlayers={false}
+        />
+      ) : (
+        <DrawScreen
+          initialPlayers={draftPlayers}
+          onRestart={() => setDraftPlayers(null)}
+          onSaveMatch={handleSaveMatch}
+          canManageMatches={Boolean(isPlayerAdmin)}
+          savingMatch={savingMatch}
+        />
+      )}
+
+      <LoginScreen
+        open={showLoginModal}
+        initialEmail={storedEmail}
+        onRequestCode={handleRequestCode}
+        onVerifyCode={handleVerifyCode}
+        previewCode={previewCode}
+        loading={authSubmitting}
+        onClose={() => setShowLoginModal(false)}
+      />
+
+      <PlayerRegistrationModal
+        open={showPlayerRegistration}
+        loading={creatingPlayer}
+        onClose={() => setShowPlayerRegistration(false)}
+        onSubmit={handleCreatePlayer}
+      />
+
+      <HistoryModal
+        open={showHistoryModal}
+        players={playersCatalog}
+        playerHistories={playerHistories}
+        loadingPlayerId={loadingPlayerHistoryId}
+        onLoadPlayerHistory={handleLoadPlayerHistory}
+        onClose={() => setShowHistoryModal(false)}
+      />
+
+      <MatchHistoryModal
+        open={showMatchHistoryModal}
+        matches={matches}
+        canDeleteMatches={Boolean(isPlayerAdmin)}
+        deletingMatchId={deletingMatchId}
+        onDeleteMatch={handleDeleteMatch}
+        onClose={() => setShowMatchHistoryModal(false)}
+      />
+    </div>
+  )
+}
+
+function formatMatchNoticeDate(value) {
+  if (!value) return 'Partida sem titulo'
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Partida sem titulo'
+
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date)
 }

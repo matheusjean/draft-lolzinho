@@ -5,7 +5,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:backend": "npm --prefix backend run dev",
     "build": "vite build",
+    "build:backend": "npm --prefix backend run build",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs postgres",
+    "db:ps": "docker compose ps",
+    "backfill:players": "npm --prefix backend run backfill:players",
+    "seed:backend": "npm --prefix backend run seed",
+    "seed:match:yesterday": "npm --prefix backend run seed:match:yesterday",
+    "seed:match:extra-2026-04-13": "npm --prefix backend run seed:match:extra-2026-04-13",
     "preview": "vite preview"
   },
   "dependencies": {
