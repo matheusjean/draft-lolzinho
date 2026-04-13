@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum WinnerSide {
+  BLUE
+  RED
+}
+
+enum TeamSide {
+  BLUE
+  RED
+}
+
+model User {
+  id            String      @id @default(cuid())
+  email         String      @unique
+  isSuperAdmin  Boolean     @default(false)
+  lastLoginAt   DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  loginCodes    LoginCode[]
+  createdMatches Match[]    @relation("MatchCreator")
+}
+
+model LoginCode {
+  id         String    @id @default(cuid())
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([userId, codeHash, consumedAt])
+}
+
+model Match {
+  id           String      @id @default(cuid())
+  title        String?
+  notes        String?
+  patchVersion String?
+  gameDate     DateTime
+  winnerSide   WinnerSide?
+  blueTeam     Json
+  redTeam      Json
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  createdById  String
+  createdBy    User        @relation("MatchCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  participants MatchParticipant[]
+
+  @@index([gameDate])
+  @@index([createdById])
+}
+
+model Player {
+  id             String             @id @default(cuid())
+  name           String
+  normalizedName String             @unique
+  playerImg      String?
+  matchesCount   Int                @default(0)
+  lastMatchAt    DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  participations MatchParticipant[]
+
+  @@index([name])
+  @@index([lastMatchAt])
+}
+
+model MatchParticipant {
+  id           String   @id @default(cuid())
+  side         TeamSide
+  championName String
+  role         String
+  createdAt    DateTime @default(now())
+  matchId      String
+  playerId     String
+  match        Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  player       Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([matchId, playerId])
+  @@index([playerId])
+  @@index([matchId])
+  @@index([championName])
+}
