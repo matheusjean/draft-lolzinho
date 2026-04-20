@@ -1,4 +1,5 @@
 import serverless from 'serverless-http';
+import type { IncomingMessage } from 'node:http';
 
 import { createNestApp } from '../src/bootstrap';
 
@@ -15,7 +16,20 @@ async function getHandler() {
   return cachedHandler;
 }
 
+function normalizeRequestUrl(request: unknown) {
+  const incomingRequest = request as IncomingMessage;
+  const url = incomingRequest.url ?? '';
+
+  if (url.startsWith('/api') || !url.startsWith('/')) {
+    return;
+  }
+
+  incomingRequest.url = `/api${url}`;
+}
+
 export default async function handler(request: unknown, response: unknown) {
+  normalizeRequestUrl(request);
+
   const server = await getHandler();
   return server(
     request as Parameters<Handler>[0],
