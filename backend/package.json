@@ -14,10 +14,7 @@
     "seed:match:extra-2026-04-13": "ts-node --project tsconfig.json --transpile-only prisma/seed-extra-match-2026-04-13.ts",
     "backfill:players": "ts-node --project tsconfig.json --transpile-only prisma/backfill-player-history.ts",
     "postinstall": "prisma generate",
-    "vercel-build": "npm run prisma:generate && npm run build"
-  },
-  "prisma": {
-    "seed": "ts-node --project tsconfig.json --transpile-only prisma/seed.ts"
+    "vercel-build": "node ./scripts/vercel-build.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.19",

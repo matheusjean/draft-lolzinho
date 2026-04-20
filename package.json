@@ -3,10 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": [
+    "backend"
+  ],
   "scripts": {
     "dev": "vite",
     "dev:backend": "npm --prefix backend run dev",
     "build": "vite build",
+    "vercel-build": "npm --workspace backend run vercel-build && vite build",
     "build:backend": "npm --prefix backend run build",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
