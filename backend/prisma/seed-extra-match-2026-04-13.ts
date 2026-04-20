@@ -5,6 +5,8 @@ import {
   WinnerSide,
 } from '@prisma/client';
 
+import '../src/config/env-fallbacks';
+
 const prisma = new PrismaClient();
 
 const ADMIN_EMAIL = 'matheusjean11@gmail.com';

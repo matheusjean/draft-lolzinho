@@ -1,3 +1,4 @@
+import '../src/config/env-fallbacks';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
