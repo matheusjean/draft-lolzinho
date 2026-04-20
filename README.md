@@ -98,7 +98,7 @@ Tambem foi configurado um `vercel-build` no backend que:
 - roda `prisma migrate deploy` automaticamente apenas em `production`
 - faz o build do Nest
 
-Na raiz do projeto agora existe uma Vercel Function catch-all em `api/[[...path]].ts`, entao voce pode fazer deploy em **um unico projeto da Vercel**:
+Na raiz do projeto agora existe uma Vercel Function catch-all em `api/[...path].ts`, entao voce pode fazer deploy em **um unico projeto da Vercel**:
 
 - frontend na mesma URL principal
 - backend atendendo em `/api/*`
@@ -161,25 +161,6 @@ npm run seed
 ```
 
 Se voce pretende migrar os dados do banco local para producao, importe primeiro `User`, `Player`, `Match` e `MatchParticipant`, e nao precisa rodar seed.
-
-### Deploy estilo Railway
-
-Tambem existe suporte ao mesmo modelo usado no `farmais-backoffice`: um unico processo Nest serve a API e tambem entrega o front buildado.
-
-Nesse modo:
-
-- `npm run build:railway` builda o front em `dist/`, gera o Prisma Client, aplica migrations e builda o backend
-- `npm run start:railway` sobe `node backend/dist/src/main.js`
-- o Nest serve `dist/index.html` para rotas do front
-- `/api/*` continua reservado para o backend
-
-O arquivo `railway.json` ja aponta:
-
-- `buildCommand`: `npm run build:railway`
-- `startCommand`: `npm run start:railway`
-- `healthcheckPath`: `/api/health`
-
-Nesse deploy, nao precisa configurar `VITE_API_URL`, porque o front chama `/api` na mesma origem.
 
 Rotas base:
 
