@@ -4,6 +4,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createNestApp } from '../src/bootstrap';
 
 type Handler = ReturnType<typeof serverless>;
+type VercelHandlerOptions = {
+  pathPrefix?: string;
+};
 
 let cachedHandler: Handler | null = null;
 
@@ -16,11 +19,16 @@ async function getHandler() {
   return cachedHandler;
 }
 
-function normalizeRequestUrl(request: unknown) {
+function normalizeRequestUrl(request: unknown, pathPrefix = '') {
   const incomingRequest = request as IncomingMessage;
   const url = incomingRequest.url ?? '';
 
   if (url.startsWith('/api') || !url.startsWith('/')) {
+    return;
+  }
+
+  if (pathPrefix && !url.startsWith(pathPrefix)) {
+    incomingRequest.url = `/api${pathPrefix}${url}`;
     return;
   }
 
@@ -43,22 +51,26 @@ function sendJson(
   serverResponse.end(JSON.stringify(body));
 }
 
-export default async function handler(request: unknown, response: unknown) {
-  normalizeRequestUrl(request);
+export function createVercelHandler(options: VercelHandlerOptions = {}) {
+  return async function handler(request: unknown, response: unknown) {
+    normalizeRequestUrl(request, options.pathPrefix);
 
-  const requestPath = getRequestPath(request);
+    const requestPath = getRequestPath(request);
 
-  if (requestPath === '/api/health') {
-    return sendJson(response, 200, {
-      status: 'ok',
-      runtime: 'vercel-function',
-      timestamp: new Date().toISOString(),
-    });
-  }
+    if (requestPath === '/api/health') {
+      return sendJson(response, 200, {
+        status: 'ok',
+        runtime: 'vercel-function',
+        timestamp: new Date().toISOString(),
+      });
+    }
 
-  const server = await getHandler();
-  return server(
-    request as Parameters<Handler>[0],
-    response as Parameters<Handler>[1],
-  );
+    const server = await getHandler();
+    return server(
+      request as Parameters<Handler>[0],
+      response as Parameters<Handler>[1],
+    );
+  };
 }
+
+export default createVercelHandler();
